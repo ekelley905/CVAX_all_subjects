@@ -1,0 +1,110 @@
+---
+title: "CVAX RNASeq Analysis - Figures"
+author: "E. Kelley"
+date: "5/5/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = FALSE, echo = TRUE)
+library(tidyverse)
+library(here)
+library(readxl)
+library(DESeq2)
+library(biomaRt)
+library(patchwork)
+```
+
+
+
+```{r}
+plotMA(cvax_results_8v0, ylim=c(-3,3))
+```
+
+```{r}
+plotDispEsts(cvax_de_data, ylim = c(1e-6, 1e1) )
+```
+
+```{r}
+hist(cvax_results_8v0$padj, breaks=20, col="grey")
+```
+
+
+
+Volcano plots
+```{r 8v0}
+
+
+topgenes_8v0 <- res_8v0_df %>%
+  arrange(padj, log2FoldChange) %>%
+  filter(log2FoldChange >= 2 & padj <= 0.001 | padj <= 0.001 & log2FoldChange <= -2) %>%
+  pull(ensembl)
+
+
+res_8v0_df <- res_8v0_df %>% mutate(top_gene_lab = ifelse(ensembl %in% topgenes_8v0, hgnc_symbol, ""))
+
+
+ggplot(res_8v0_df, aes(log2(baseMean), log2FoldChange, label=top_gene_lab)) + 
+  geom_point(aes(colour=padj < 0.05), pch=20, size=0.5) +
+  labs(x="mean of normalized counts", y="log fold change") + 
+  lims(y=c(-5,10), x=c(-5,30)) + ggrepel::geom_text_repel() 
+
+
+volcano_8v0 <- ggplot(filter(res_8v0_df, !is.na(padj)), aes(log2FoldChange, -log10(padj), label = top_gene_lab)) +
+  geom_vline(xintercept = -2, linetype = "dashed") +
+  geom_vline(xintercept = 2, linetype = "dashed") +
+  geom_hline(yintercept = 3, linetype = "dashed") + 
+  geom_point(aes(color = padj <= 0.001 & log2FoldChange >= 2 | padj <= 0.001 & log2FoldChange <= -2), size = 2) +
+  ggrepel::geom_label_repel(box.padding =0.5, max.overlaps = Inf) +
+  scale_x_continuous(
+    breaks = seq(-5, 5, 1),
+    limits = c(-5, 5)
+  ) +
+  theme_minimal() +
+  geom_vline(xintercept = 0) +
+  ggtitle("Day 8") +
+  theme(legend.position = "None") +
+  scale_color_manual(values = c("#481567FF", "#1F968BFF")) 
+
+volcano_8v0
+```
+
+
+
+```{r 28v0}
+
+topgenes_28v0 <- res_28v0_df %>%
+  arrange(padj, log2FoldChange) %>%
+  filter(log2FoldChange >= 2 & padj <= 0.001 | padj <= 0.001 & log2FoldChange <= -2) %>%
+  pull(ensembl)
+
+res_28v0_df <- res_28v0_df %>% mutate(top_gene_lab = ifelse(ensembl %in% topgenes_28v0, hgnc_symbol, ""))
+
+
+ggplot(res_28v0_df, aes(log2(baseMean), log2FoldChange, label=top_gene_lab)) + 
+  geom_point(aes(colour=padj < 0.05), pch=20, size=0.5) +
+  labs(x="mean of normalized counts", y="log fold change") + 
+  lims(y=c(-5,10), x=c(-5,30)) 
+
+volcano_28v0 <- ggplot(filter(res_28v0_df, !is.na(padj)), aes(log2FoldChange, -log10(padj), label=top_gene_lab)) + 
+geom_point(aes(color=padj <= 0.001 & log2FoldChange >= 2 | padj <= 0.001 & log2FoldChange <= -2), 
+           size=2) +  
+  scale_x_continuous(breaks = seq(-5,5,1),
+                     limits = c(-5,5)) +
+  ggrepel::geom_label_repel() + 
+  theme_minimal() +
+  geom_vline(xintercept = 0)  +
+  ggtitle("Day 28") + 
+  theme(legend.position = "None") + scale_color_manual(values=c("#481567FF", "#1F968BFF")) +
+  geom_vline(xintercept = -2, linetype="dashed") +
+  geom_vline(xintercept = 2, linetype="dashed") +
+  geom_hline(yintercept = 3, linetype="dashed")
+
+volcano_8v0 / volcano_28v0 
+
+
+
+```
+

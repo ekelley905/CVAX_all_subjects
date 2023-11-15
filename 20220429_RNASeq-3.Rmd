@@ -1,0 +1,221 @@
+---
+title: "GO Analysis"
+author: "E. Kelley"
+date: "5/26/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set( echo = TRUE)
+library(tidyverse)
+library(DESeq2)
+library(clusterProfiler)
+library(cowplot)
+library(org.Hs.eg.db)
+library(UpSetR)
+```
+
+```{r}
+# 62 genes in res_8v0_df w/o hgnc symbol; only one of those had a sig adj p value, ENSG00000233844.
+
+# 9468 genes in res_8v0_df w/o an entrez id. Why???
+
+```
+
+
+
+```{r}
+# Use clusterProfiler
+
+universe <- as.data.frame(cvax_results_8v0) %>% pull(ensembl)
+sigGenes <- as.data.frame(cvax_results_8v0) %>%
+  filter(padj < 0.05, !is.na(ensembl)) %>% pull(ensembl)
+
+# biological processes
+enrich_go_BP <- enrichGO(
+  gene= sigGenes,
+  universe = universe,
+  OrgDb = org.Hs.eg.db,
+  keyType = "ENSEMBL",
+  ont = "BP",
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.01,
+  qvalueCutoff  = 0.05)
+egbp <- dotplot(enrich_go_BP)
+egbp
+# ggsave("figures/egbp.png", device = "png")
+# molecular functions
+enrich_go_MF <- enrichGO(
+  gene= sigGenes,
+  universe = universe,
+  OrgDb = org.Hs.eg.db,
+  keyType = "ENSEMBL",
+  ont = "MF",
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.01,
+  qvalueCutoff  = 0.05)
+egmf <- dotplot(enrich_go_MF)
+egmf
+# ggsave("figures/egmf.png", device = "png")
+# cellular components
+enrich_go_CC <- enrichGO(
+  gene= sigGenes,
+  universe = universe,
+  OrgDb = org.Hs.eg.db,
+  keyType = "ENSEMBL",
+  ont = "CC",
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.01,
+  qvalueCutoff  = 0.05)
+egcc <- dotplot(enrich_go_CC)
+egcc
+
+# get the entrez id's for the genes since that's what MSigDB uses
+# ensembl=useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+# 
+# genemap <- getBM( attributes = c("ensembl_gene_id", "hgnc_symbol"),
+# filters = "ensembl_gene_id", 
+# values = rownames(cvax_results_28v0),
+# mart = ensembl )
+
+universe_hgnc <- cvax_results_8v0@listData$hgnc_symbol
+sigGenesSym <- as.data.frame(cvax_results_8v0) %>%
+  filter(padj < 0.05, !is.na(hgnc_symbol)) %>% pull(hgnc_symbol)
+c7 <- read.gmt("CVAX_RNASeq_run001/c7.all.v7.4.symbols.gmt")
+c7vax <- read.gmt("CVAX_RNASeq_run001/c7.vax.v7.4.symbols.gmt")
+
+egmt <- enricher(sigGenesSym, TERM2GENE =c7, universe = universe_hgnc)
+egmtvax <- enricher(sigGenesSym, TERM2GENE = c7vax, universe = universe_hgnc)
+barplot(egmt, drop=TRUE, showCategory=10, font.size = 8)
+dotplot(egmt, font.size=8)
+barplot(egmtvax, drop=TRUE, showCategory=10, font.size = 8)
+row.names(egmtvax@result)[1] <- "TSANG_PBMC_FLUVIRIN_PANDEMRIX...7DY_POSITIVE"
+egmtvax@result <- egmtvax@result %>%
+  mutate(GeneRatio_num = (as.numeric(str_split_fixed(GeneRatio, "/", 2)[,1]))/131)
+
+bp <- ggplot(arrange(egmtvax@result[1:20,], Count), aes(GeneRatio_num, reorder(ID, Count), color=p.adjust, size=Count)) + geom_point() + scale_color_viridis_c(option = "plasma") +
+  ylab("MSigDB C7 VAX Signature") + xlab("Gene Ratio") + ggtitle("Day 8: Vaccine Response Gene Sets") + theme_bw()
+bp
+# ggsave("figures/egmtvax.png", device = "png", width = 12, height = 10)
+top_row <- plot_grid(volcano_8v0, volcano_28v0)
+plot_grid(top_row, bp, ncol = 1)
+
+egmtvax@result <- egmtvax@result %>% mutate(ID = str_replace(ID, "TSANG_PBMC_FLUVIRIN_PANDEMRIX_ADULT_CORR_WITH_CELL_FREQ_CD27HI_CD38HI_CD20_NEG_PLASMABLASTS_AND_CD38PLUS_OF_IGD_CD27PLUS_MEM_B_CELLS_7DY_POSITIVE", "TSANG_PBMC_FLUVIRIN_PANDEMRIX...7DY_POSITIVE"))
+
+# up_egmtvax <- upsetplot(egmtvax, 20)
+```
+
+
+Try ClusterProfiler w/ Immport genes as the db.
+```{r}
+ImmportGeneList <- read_delim("CVAX_RNASeq_run001/ImmportGeneList.txt", 
+    "\t", escape_double = FALSE, trim_ws = TRUE) 
+names(ImmportGeneList)[c(1,6)] <- c("gene", "ont") 
+
+ImmportGeneList <- ImmportGeneList %>%
+  dplyr::select(ont, gene)
+universe_hgnc <- cvax_results_8v0@listData$hgnc_symbol
+
+ImmportCP <- enricher(sigGenesSym, TERM2GENE = ImmportGeneList, universe = universe_hgnc)
+
+ImmportCP@result <- ImmportCP@result %>%
+  mutate(GeneRatio_num = (as.numeric(str_split_fixed(GeneRatio, "/", 2)[,1]))/36)
+
+plot_Immport <- ggplot(arrange(ImmportCP@result[1:6,], Count), aes(GeneRatio_num, reorder(ID, Count), size=Count, color=p.adjust < 0.05)) + geom_point() + scale_color_viridis_c(option = "plasma") +
+  ylab("Immport Category") + xlab("Gene Ratio") + ggtitle("Day 8: Enriched Gene Sets Immport") + theme_bw()
+plot_Immport
+```
+
+
+Try GSEA using ClusterProfiler. The gene list must be ordered by L2FC first.
+```{r}
+# d <- read.csv(your_csv_file)
+## assume that 1st column is ID
+## 2nd column is fold change
+
+## feature 1: numeric vector
+geneListHGNC <- res_8v0_df$log2FoldChange
+
+## feature 2: named vector
+names(geneListHGNC) <- res_8v0_df$hgnc_symbol
+
+## feature 3: decreasing order
+geneListHGNC <- geneListHGNC[!is.na(geneListHGNC)]
+
+geneListHGNC <- sort(geneListHGNC, decreasing = TRUE)
+
+geneListHGNC <- geneListHGNC[!(names(geneListHGNC) == "" | names(geneListHGNC) == "<unknown>")]
+
+geneListHGNCsig <- geneListHGNC[abs(geneListHGNC) > 1]
+head(geneListHGNCsig)
+geneListHGNCsig <- sort(geneListHGNCsig, decreasing = TRUE)
+
+gsea_immport <- GSEA(geneList=geneListHGNCsig, TERM2GENE = ImmportGeneList, pvalueCutoff = 0.05)
+head(gsea_immport)
+
+```
+
+
+
+
+```{r}
+# test enrichkegg
+# sigGenesEntrez <- as.data.frame(cvax_results_8v0) %>%
+#   filter(padj < 0.05, !is.na(entrezid)) %>% pull(entrezid)
+## feature 1: numeric vector
+geneListEntrez <- res_8v0_df$log2FoldChange
+
+## feature 2: named vector
+names(geneListEntrez) <- res_8v0_df$entrezid
+
+## feature 3: decreasing order
+geneListEntrez <- sort(geneListEntrez, decreasing = TRUE)
+
+geneListEntrezSig <- geneListEntrez[abs(geneListEntrez) > 1]
+geneListEntrezSig <- geneListEntrezSig[!is.na(names(geneListEntrezSig))]
+head(geneListEntrezSig)
+
+# ~1500 genes do not have an Entrez ID. 
+
+kk <- enrichKEGG(gene = geneListEntrezSig,
+                 organism     = 'hsa',
+                 pvalueCutoff = 0.05)
+kkr <- setReadable(kk, 'org.Hs.eg.db', 'ENTREZID')
+cnetplot(kkr)
+
+kk2 <- gseKEGG(geneList = geneListEntrezSig,
+               organism = 'hsa',
+               nPerm = 1000,
+               minGSSize = 120,
+               pvalueCutoff = 0.05,
+               verbose = FALSE)
+
+```
+
+```{r plot Ig heatmap}
+
+ig <- res_8v0_df %>% filter(str_detect(hgnc_symbol, "IG")) %>% 
+  filter(str_detect(hgnc_symbol, "FIGLA", negate = T)) %>%
+  filter(str_detect(hgnc_symbol, "HIGD2AP2", negate = T)) %>%
+  filter(log2FoldChange > 1) %>% arrange(desc(log2FoldChange)) %>% slice_head(n=30)
+
+
+norm_counts <- counts(cvax_de_data, normalized=T)
+ig_norm <- norm_counts[rownames(ig), ]
+row.names(ig_norm) <- ig$hgnc_symbol
+colnames(ig_norm) <- col_data$sample_id
+col_data2 <- col_data
+row.names(col_data2) <- col_data2$sample_id
+meta <- bind_rows()
+heat_colors <- RColorBrewer::brewer.pal(9, "Blues")
+# paired_cols <- c("CVAX003" = "#8DD3C7","CVAX004" = "#FFFFB3", "CVAX010" = "#BEBADA",
+#                  "CVAX014" = "#FB8072", "CVAX016" = "#80B1D3","CVAX017" = "#FDB462", "CVAX018" = "#B3DE69", "CVAX020" = "#FCCDE5")
+annot_colors <- list(#subject_id = paired_cols,
+                     days_from_first_dose = c("0" = "#1B9E77", "8"= "#7570B3", "28"="#E7298A"))
+short_names <- str_sub(str_extract(colnames(ig_norm), "\\d+"), start = 2)
+p <- pheatmap::pheatmap(ig_norm, color=heat_colors, cluster_rows = T, show_rownames = T, show_colnames = T,annotation=dplyr::select(col_data2, c(days_from_first_dose)), scale = "row", labels_col = short_names, angle_col = 45, annotation_colors = annot_colors)
+p
+# ggsave("IG_heatmap.png", p, device = "png", width = 12, height = 12)
+```

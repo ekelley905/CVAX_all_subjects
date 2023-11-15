@@ -1,0 +1,126 @@
+---
+title: "CVAX RNASeq Analysis - Model"
+author: "E. Kelley"
+date: "5/5/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = FALSE, echo = TRUE)
+library(tidyverse)
+library(DESeq2)
+```
+
+Using LRT for time series data with subject_id in the reduced model.
+```{r apply LRT for time series analysis}
+# cvax_de_data <- DESeq(cvax_de_data, test="LRT", reduced=~subject_id)
+
+# saveRDS(cvax_de_data, "CVAX_RNASeq_run001/cvax_de_data_all_subjects.rds")
+
+cvax_de_data <- readRDS("CVAX_RNASeq_run001/cvax_de_data_all_subjects.rds")
+```
+
+
+In general, the results for a comparison of any two levels of a variable can be extracted using the contrast argument to results. The user should specify three values: the name of the variable, the name of the level in the numerator, and the name of the level in the denominator. Here we extract results for the log2 of the fold change of DPN / Control.
+```res <- results( dds, contrast = c("treatment", "DPN", "Control") )```
+
+```{r}
+cvax_results_8v0 <- results(cvax_de_data, contrast = c("days_from_first_dose", "8", "0"))
+
+cvax_results_8v0_ordered <- cvax_results_8v0[order(cvax_results_8v0$padj), ]
+
+# added the hgnc_symbol column to results df
+res_df <- bind_cols(as.data.frame(cvax_results_8v0), cvax_results_8v0$hgnc_symbol)
+
+# write.csv(as.data.frame(cvax_results_8v0_ordered),"CVAX_RNASeq_run001/CVAX_results_8v0_ordered.csv", row.names = T)
+```
+
+
+
+```{r add hgnc symbol to cvax 8v0 results}
+# From the DESeq2 beginners guide
+cvax_results_8v0$ensembl <- rownames(cvax_results_8v0)
+
+ensembl=useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+
+genemap <- getBM( attributes = c("ensembl_gene_id", "hgnc_symbol"),
+filters = "ensembl_gene_id", 
+values = rownames(cvax_results_8v0),
+mart = ensembl )
+no_hgnc <- genemap$hgnc[genemap$hgnc_symbol == ""] # 7025 ENSG w/ missing hgnc_symbol, leaving 22611 ENSG w/ hgnc symbol
+
+idx <- match(rownames(cvax_results_8v0), genemap$ensembl_gene_id) 
+
+cvax_results_8v0$hgnc_symbol <- genemap$hgnc_symbol[ idx ]
+
+```
+
+
+```{r}
+# add entrez id's to the data
+
+# From the DESeq2 beginners guide
+
+ensembl=useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+
+genemap2 <- getBM(attributes = c("ensembl_gene_id", "entrezgene_id"),
+filters = "ensembl_gene_id", 
+values = rownames(cvax_results_8v0),
+mart = ensembl)
+
+# no_hgnc <- genemap$hgnc[genemap$hgnc_symbol == ""] # 7353 ENSG w/ missing hgnc_symbol, leaving 22611 ENSG w/ hgnc symbol
+
+idx2 <- match(rownames(cvax_results_8v0), genemap$ensembl_gene_id) 
+
+cvax_results_8v0$entrezid <- genemap2$entrezgene_id[ idx2 ]
+```
+
+
+
+
+```{r day 8 contrasts}
+cvax_results_8v0_ordered <- cvax_results_8v0[order(cvax_results_8v0$padj), ]
+res_8v0_df <- as.data.frame(cvax_results_8v0_ordered)
+
+# write.csv(as.data.frame(cvax_results_8v0_ordered),"CVAX_RNASeq_run001/CVAX_results_8v0.csv", row.names = T)
+```
+
+
+```{r extract day 28 contrasts}
+cvax_results_28v0 <- results(cvax_de_data, contrast = c("days_from_first_dose", "28", "0"))
+```
+
+```{r add hgnc symbol to cvax 28v0 results}
+# From the DESeq2 beginners guide
+cvax_results_28v0$ensembl <- rownames(cvax_results_28v0)
+
+ensembl=useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+
+genemap <- getBM( attributes = c("ensembl_gene_id", "hgnc_symbol"),
+filters = "ensembl_gene_id", 
+values = rownames(cvax_results_28v0),
+mart = ensembl )
+no_hgnc <- genemap$hgnc[genemap$hgnc_symbol == ""] # 7353 ENSG w/ missing hgnc_symbol, leaving 22611 ENSG w/ hgnc symbol
+
+idx <- match(rownames(cvax_results_28v0), genemap$ensembl_gene_id) 
+
+cvax_results_28v0$hgnc_symbol <- genemap$hgnc_symbol[ idx ]
+
+```
+
+
+
+```{r day 28 contrasts}
+cvax_results_28v0_ordered <- cvax_results_28v0[order(cvax_results_28v0$padj), ]
+res_28v0_df <- as.data.frame(cvax_results_28v0_ordered)
+
+# write.csv(as.data.frame(cvax_results_28v0_ordered),"CVAX_RNASeq_run001/CVAX_results_28v0.csv", row.names = T)
+
+# write.csv(res_8v0_df, "CVAX_RNASeq_run001/CVAX_results_all_subjects_8v0.csv", row.names = T)
+# write.csv(res_28v0_df, "CVAX_RNASeq_run001/CVAX_results_all_subjects_28v0.csv", row.names = T)
+```
+
+
+

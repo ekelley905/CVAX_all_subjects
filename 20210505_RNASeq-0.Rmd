@@ -1,0 +1,163 @@
+---
+title: "CVAX RNA Seq Analysis - Import and Tidy"
+author: "E. Kelley"
+date: "5/5/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = FALSE, echo = TRUE)
+library(tidyverse)
+library(here)
+library(readxl)
+library(DESeq2)
+library(biomaRt)
+```
+
+The Phoenix yaml file lists reverse stranded as the RNASeq library type, so based on this, we will use counts from Column 4 of the ReadsPerGene.out.tab matrix.
+
+------------------------------------------------------------------------
+
+"REMINDER regarding the STAR output The ReadsPerGene.out.tab output files of STAR (from option --quantMode GeneCounts) contain 4 columns that correspond to different counts per gene calculated according to the protocol's strandedness (see Mapping with STAR practical):
+
+column 1: gene ID column 2: counts for unstranded RNA-seq. column 3: counts for the 1st read strand aligned with RNA column 4: counts for the 2nd read strand aligned with RNA (the most common protocol nowadays)"
+
+------------------------------------------------------------------------
+
+Some background links:\
+[DESeq2 vignette](http://bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#time-series-experiments)
+[DE course](https://biocorecrg.github.io/RNAseq_course_2019/differential_expression.html)  
+[another course](https://hbctraining.github.io/DGE_workshop/lessons/04_DGE_DESeq2_analysis.html)  
+
+"The package DESeq2 provides methods to test for differential expression by use of negative binomial generalized linear models; the estimates of dispersion and logarithmic fold changes incorporate data-driven prior distributions."
+
+```{r import sample metadata and create col data}
+# import sample meta data
+
+sample_metadata <- read_excel("CVAX_RNASeq_run001/CVAX_Sample_Mapping_Key.xlsx") %>%
+  # filter(`Patients::Study Patient ID` %in% c("CVAX003", "CVAX004", "CVAX010", "CVAX014", 
+  #                                            "CVAX016", "CVAX017", "CVAX018", "CVAX020")) %>%
+  mutate(days_from_first_dose = str_extract(`Samples::Study Sample ID`, "(\\d+)$")) %>%
+  mutate(sequence_id = str_sub(SampleName, 1, -8)) %>%
+  dplyr::select(-c(1,2,5,6))
+names(sample_metadata)[1:2] <- c("subject_id", "sample_id") 
+
+col_data <- as.data.frame(sample_metadata) %>%
+  dplyr::select(sample_id, subject_id, days_from_first_dose)
+row.names(col_data) <- sample_metadata$sequence_id
+
+
+```
+
+From the vignette:
+"The DESeq2 model internally corrects for library size, so transformed or normalized values such as counts scaled by library size should not be used as input."
+
+```{r import STAR counts}
+# # import read counts from STAR ReadsPerGene.out.tab files (column 4 for second strand counts)
+ files <- dir("CVAX_RNASeq_run001/STAR_counts/", "ReadsPerGene.out.tab")
+
+ path <- "CVAX_RNASeq_run001/STAR_counts/"
+
+  counts_list <- files %>%
+   map(function(x){
+     read.table(file.path(path, x), skip = 4) %>%
+   dplyr::select(4) %>%
+  set_names(str_replace(x, ".ReadsPerGene.out.tab", ""))
+   })
+# # get the ENSG's from a single ReadsPerGene.out.tab file
+ensg_id <- read_delim("CVAX_RNASeq_run001/STAR_counts/JA20035_CVAX003_1_PB_Whole_C1_ILSMR.ReadsPerGene.out.tab", "\t", col_names = F, skip = 4) %>%
+   pull(1)
+ counts_df <- bind_cols(counts_list)
+  row.names(counts_df) <- ensg_id
+
+
+ # counts_sum <- counts_df %>%
+ #   summarize(across(where(is.numeric), ~sum(.x, na.rm = TRUE))) %>%
+ #   as.integer()
+
+# write.csv(counts_df, "CVAX_raw_counts.csv", row.names = T)
+```
+
+```{r order counts matrix and col data the same}
+# "It is absolutely critical that the columns of the count matrix and the rows of the column data (information about samples) are in the same order."
+# need to order the sequence_id variable in the col_data. 
+col_data$rows <- row.names(col_data)
+col_data <- col_data[match(colnames(counts_df), col_data$rows), ]
+# need to check factor levels of days_from_first_dose
+col_data$days_from_first_dose <- factor(col_data$days_from_first_dose, levels=c(0,8,28))
+col_data$subject_id <- factor(col_data$subject_id)
+
+# write the col_data
+# write_csv(col_data, "CVAX_RNASeq_run001/CVAX_RNASeq_run001_all_patients_col_data.csv")
+```
+
+From the DESeq2 vignette:
+Can I use DESeq2 to analyze paired samples?
+Yes, you should use a multi-factor design which includes the sample information as a term in the design formula. This will account for differences between the samples while estimating the effect due to the condition. The condition of interest should go at the end of the design formula, e.g. ~ subject + condition.
+
+For our design formula, we will use ~subject_id + days_from_first_dose
+```{r create DESeq Data Set and filter low count genes}
+cvax_de_data <- DESeqDataSetFromMatrix(countData = counts_df,
+colData = col_data,
+design = ~ subject_id + days_from_first_dose)
+# filter out genes w/ less than 10 total counts
+keep <- rowSums(counts(cvax_de_data)) >= 10
+cvax_de_data <- cvax_de_data[keep,]
+```
+
+
+
+```{r add gene symbols to the DESeq data set}
+ # trying biomaRt instead suggested from here: (https://bioinformatics-core-shared-training.github.io/cruk-summer-school-2018/RNASeq2018/html/05_Annotation_and_Visualisation.nb.html#adding-annotation-to-the-deseq2-results)
+
+
+# From the DESeq2 beginners guide
+cvax_ensembl <- rownames(cvax_de_data)
+
+ensembl=useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+
+genemap <- getBM(attributes = c("ensembl_gene_id", "hgnc_symbol"),
+filters = "ensembl_gene_id", 
+values = cvax_ensembl,
+mart = ensembl)
+
+no_hgnc <- genemap$hgnc[genemap$hgnc_symbol == ""] # 7353 ENSG w/ missing hgnc_symbol, leaving 22611 ENSG w/ hgnc symbol
+
+idx <- match(cvax_ensembl, genemap$ensembl_gene_id) 
+
+cvax_hgnc_symbol <- genemap$hgnc_symbol[ idx ]
+
+#### add gene symbol to DESeqDataSet
+mcols(cvax_de_data) <- cbind(mcols(cvax_de_data), cvax_hgnc_symbol)
+ 
+# export counts w/ hgnc symbol
+cvax_counts_with_hgnc <- cbind(mcols(cvax_de_data) ,counts(cvax_de_data))
+ 
+isDup <- duplicated(genemap$ensembl_gene_id)
+dup <- genemap$ensembl_gene_id[isDup] # 3 duplicate ENSG
+genemap[genemap$ensembl_gene_id %in% dup,]
+
+```
+
+
+```{r}
+
+# topgenes <- sort(res_df$padj)[25]
+# 
+# labeled_res_df <- res_df %>% mutate(top_gene_lab = ifelse(padj <= topgenes, hgnc_symbol, ""))
+# 
+# 
+# ggplot(labeled_res_df, aes(log2(baseMean), log2FoldChange, label=top_gene_lab)) + 
+#   geom_point(aes(colour=padj < 0.05), pch=20, size=0.5) +
+#   labs(x="mean of normalized counts", y="log fold change") + 
+#   lims(y=c(-5,10), x=c(-5,30)) + ggrepel::geom_text_repel() 
+# 
+# library(ghibli)
+# subjects_8_day8 <- ggplot(filter(labeled_res_df, !is.na(padj)), aes(log2FoldChange, -log10(padj), label=top_gene_lab)) + geom_point(aes(color=padj < 0.05), size=2) +
+#   lims(x=c(-5, 5)) + ggrepel::geom_text_repel() + theme_minimal() + scale_color_manual(values=c("#278B9AFF", "#DE7862FF"))
+# ggsave("volcano_plot_8subjects_day8.png", subjects_8_day8, device = "png")
+```
+
+
